@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import base64
+import os
+import sqlite3
+import json
+from functions.create_table_if_not_exists import create_table_if_not_exists
+from functions.decrypt_message import decrypt_message
+from functions.repo_operations import check_permission_user, get_public_key, get_username_by_id, load_server_private_key, load_session_from_id, sign_message, verify_session_file, verify_subject_signature
+
+
+def suspend_subject(data, permission="SUBJECT_DOWN"):
+
+    session_id = data["session_id"]
+
+    if verify_session_file(session_id):
+
+        session_data = load_session_from_id(session_id)
+
+        session_roles = session_data.get("roles")
+        session_org_id = session_data.get("organization_id")
+        session_key = session_data.get("symmetric_key")
+        session_user_id = session_data.get("user_id")
+        session_username = get_username_by_id(session_user_id)
+        session_key = bytes.fromhex(session_key)
+
+        decrypted_message = decrypt_message(data["encrypted_data"],session_key) 
+
+        data_str = decrypted_message.decode('utf-8')
+
+        # Passo 2: Carregar a string como um dicionário
+        data_dict = json.loads(data_str)
+
+        # Passo 3: Acessar o valor da chave "roles"
+        username= data_dict["username"]
+
+        session_org_id = json.dumps(session_org_id)
+
+        if check_permission_user(session_roles, session_org_id, session_username, permission):
+
+            conn = sqlite3.connect('repository.db')
+            create_table_if_not_exists(conn)
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("SELECT id FROM organizations WHERE id = ?", (session_org_id[1],))
+                org_exists = cursor.fetchone()
+                if not org_exists:
+                    return "Organization does not exist", 404
+                
+                cursor.execute("SELECT id FROM subjects WHERE username = ?", (username,))
+                sub_exists = cursor.fetchone()
+                if not sub_exists:
+                    return "Subject does not exist", 404
+
+                cursor.execute(
+                    """
+                    UPDATE subjects
+                    SET status = ?
+                    WHERE username = ?
+                    """,
+                    ("down", username)
+                )        
+
+                # Commit and close the connection
+                conn.commit()
+                server_private_key =  load_server_private_key()
+                signature = sign_message(decrypted_message, server_private_key)
+                signature = {"signature": signature.hex()}
+
+                return signature, 201
+
+            except sqlite3.IntegrityError:
+                return "Role already exists for this organization", 409
+
+            except Exception as e:
+                return f"Database error: {e}", 500
+
+            finally:
+                conn.close()
+        else:
+            return "Permission denied", 403
+    else:
+        return "Invalid session file", 400

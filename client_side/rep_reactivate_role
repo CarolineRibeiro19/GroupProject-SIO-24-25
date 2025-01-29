@@ -1,0 +1,91 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+#./rep_reactivate_role <session file> <role>
+
+import json
+import sqlite3
+import logging
+import argparse
+import requests
+from cryptography.hazmat.primitives import serialization
+from functions.encrypt_message import encrypt_message
+from functions.common_functions import get_session_data, verify_repository_signature
+import state_handler as sh
+import os
+import sys
+
+logging.basicConfig(format='%(levelname)s	- %(message)s')
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def parse_args():
+    state = sh.load_state()
+    state = sh.parse_env(state)
+
+    parser = argparse.ArgumentParser(description="Client to add a role to the repository")
+    parser.add_argument("session_file", type=str, help="Session file")
+    parser.add_argument("role", type=str, help="role")
+    parser.add_argument("-k", '--key', nargs=1, help="Path to the key file")
+    parser.add_argument("-r", '--repo', nargs=1, help="Address:Port of the repository")
+    parser.add_argument("-v", '--verbose', help="Increase verbosity", action="store_true")
+
+    args = parser.parse_args()
+    sh.increase_verbose(args.verbose)
+    state = sh.get_param_state(args.key, args.repo, state)
+
+     # Verifica se session file existe
+    if not os.path.exists(args.session_file):
+        logger.error(f'Session file not found: {args.session_file}')
+        sys.exit(-1)
+
+    sh.save(state)
+
+    return state, args.session_file, args.role
+
+def reactivate_role(repo_address, session_file, role, repo_key):
+
+    session_id, session_key = get_session_data(session_file)
+
+    data = {"role": role}
+
+    payload = encrypt_message(data, session_key)
+
+    try:
+        url = f"http://{repo_address}/reactivate_role"
+        data_to_send = {
+            "encrypted_data": payload,
+            "session_id": session_id
+        }
+
+        response = requests.post(url, json=data_to_send)
+        response.raise_for_status()  
+        try:
+            server_response = response.json()  
+        except ValueError:
+            server_response = response.text  
+        
+        repo_key = serialization.load_pem_public_key(repo_key.encode())
+        data= json.dumps(data).encode('utf-8')
+        if verify_repository_signature(data, bytes.fromhex(server_response["signature"]), repo_key):
+            print("Role reactivated successfully!")
+            return 0
+        else:
+            print("Signature not valid...")
+            return -1
+
+    except Exception as e:
+        logger.error("Could not reactivate role.")
+
+def main():
+    state, session_file, role = parse_args()
+
+    repo_key = state["REP_PUB_KEY"]
+    repo_address = state["REP_ADDRESS"]
+
+    logger.debug("state: %s", state)
+
+    reactivate_role(repo_address, session_file, role, repo_key)
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+#-*- coding: utf-8 -*-
+
+# ./rep_create_session <organization> <username> <password> <credentials file> <session file>
+
+import logging
+import requests
+import argparse
+import json
+import functions.state_handler as sh
+from functions.common_functions import encrypt_no_session_message, generate_key_pair, serialize_public_key, sign_message
+
+# Configura o nível de debug
+logging.basicConfig(format='%(levelname)s\t- %(message)s')
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# Função para analisar os argumentos da linha de comando
+def parse_args():
+    state = sh.load_state()
+    state = sh.parse_env(state)
+
+    parser = argparse.ArgumentParser(description="Client to interact with the repository")
+    parser.add_argument("organization", type=str, help="Organization name")
+    parser.add_argument("username", type=str, help="Username")
+    parser.add_argument("password", type=str, help="Password")
+    parser.add_argument("credentials_file", type=str, help="File containing client's RSA keys")
+    parser.add_argument("session_file", type=str, help="File to save session information")
+    parser.add_argument("-k", '--key', nargs=1, help="Path to the key file")
+    parser.add_argument("-r", '--repo', nargs=1, help="Address:Port of the repository")
+    parser.add_argument("-v", '--verbose', help="Increase verbosity", action="store_true")
+
+    args = parser.parse_args()
+    sh.increase_verbose(args.verbose)
+    state = sh.get_param_state(args.key, args.repo, state)
+
+    sh.save(state)
+    #args.credentials_file #not used
+    return state, args.organization, args.username, args.password, args.session_file
+
+def save_session_file(session_file, dict):
+    # Salva o conteúdo necessário no arquivo de sessão
+    with open(session_file, "w") as f:
+        json.dump(dict,f)
+
+def main():
+    state, organization, username, password, session_file = parse_args()
+    #session_file = 'files/session.json'
+
+    repo_key = state["REP_PUB_KEY"]
+    repo_address = state["REP_ADDRESS"]
+
+    logger.debug("state: %s", state)
+
+    url = f"http://{repo_address}/create_session"
+
+    _, public_key = generate_key_pair(password)
+
+    data_to_send = {
+        'organization': organization,
+        'username': username,
+        'public_key': serialize_public_key(public_key).hex()
+    }
+
+    encrypted_payload, session_key = encrypt_no_session_message(data_to_send, repo_key)
+    
+    #sign encrypted data
+    print("encrypted_payload: ", encrypted_payload["encrypted_data"], type(encrypted_payload["encrypted_data"]))
+    signature = sign_message(password=password, message=encrypted_payload["encrypted_data"])
+    print("SIGNATURE: ", signature, type(signature))
+    encrypted_payload.update({"signature": signature})
+    #print("encrypted payload: ", encrypted_payload, type(encrypted_payload))
+
+    ### send encrypted_payload to the repository
+    response = requests.post(url, json=encrypted_payload)
+    data_in = response.json()
+
+    if response.status_code == 201:
+        session_id = data_in["session_id"] 
+        dict = {"session_id": session_id, "symmetric_key" : session_key.hex()}
+        print("Session created successfully!")
+        save_session_file(session_file, dict)
+    else:
+        print("Failed to create session.")
+
+if __name__ == "__main__":
+    main()

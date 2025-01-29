@@ -1,0 +1,63 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# ./rep_list_orgs
+
+import os
+import sys
+import json
+import logging
+import requests
+import functions.state_handler as sh
+from functions.common_functions import verify_repository_signature
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import serialization
+import base64
+
+logging.basicConfig(format='%(levelname)s\t- %(message)s')
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def rep_list_orgs(repo_key):
+    # Lista as organizações a partir do repositório
+    state = sh.load_state()
+    url = f"http://{state['REP_ADDRESS']}/organization/list"
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        server_response = response.json()
+
+        server_public_key = serialization.load_pem_public_key(repo_key.encode(), backend=default_backend())
+        
+        # verifica a assinatura do repositório
+        if not verify_repository_signature(json.dumps(server_response["data"]).encode('utf-8'), bytes.fromhex(server_response["signature"]), server_public_key):
+            logger.error("Invalid signature")
+            sys.exit(1)
+        else:
+            logger.info("Valid signature")
+
+        # Processar as organizações
+        organizations_data = server_response["data"]
+        organizations = organizations_data.get("organizations")
+
+        if organizations:
+            logger.info("Organizations:")
+            for org in organizations:
+                logger.info(f" - {org}")
+        else:
+            logger.info("No organizations found")
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to list organizations.")
+        sys.exit(1)
+
+def main():
+    # Função principal que carrega o estado e lista as organizações
+    state = sh.load_state()
+    state = sh.parse_env(state)
+    repo_key = state["REP_PUB_KEY"]
+    rep_list_orgs(repo_key)
+
+if __name__ == '__main__':
+    main()

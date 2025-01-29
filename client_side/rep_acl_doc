@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import sys
+import logging
+import requests
+import argparse
+import json
+from cryptography.hazmat.primitives import serialization
+from functions.common_functions import get_session_data, verify_repository_signature
+from functions.encrypt_message import encrypt_message
+import state_handler as sh
+
+logging.basicConfig(format='%(levelname)s\t- %(message)s')
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Modify the ACL of a document")
+    parser.add_argument("session_file", help="Session file")
+    parser.add_argument("document_name", help="Name of the document to modify")
+    parser.add_argument("operation", choices=["+", "-"], help="Add (+) or remove (-) a permission")
+    parser.add_argument("role", help="Role to modify")
+    parser.add_argument("permission", help="Permission to add/remove")
+    parser.add_argument("-v", "--verbose", help="Increase verbosity", action="store_true")
+    parser.add_argument("-k", "--key", nargs=1, help="Path to the key file")
+    parser.add_argument("-r", "--repo", nargs=1, help="Address:Port of the repository")
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+        logger.info("Setting log level to DEBUG")
+
+    state = {}
+
+    if args.key:
+        if not os.path.exists(args.key[0]) or not os.path.isfile(args.key[0]):
+            logger.error(f"Key file not found or invalid: {args.key[0]}")
+            sys.exit(-1)
+
+        with open(args.key[0], 'r') as f:
+            state['REP_PUB_KEY'] = f.read()
+            logger.info('Overriding REP_PUB_KEY from command line')
+
+    if args.repo:
+        state['REP_ADDRESS'] = args.repo[0]
+        logger.info('Overriding REP_ADDRESS from command line')
+
+    if not os.path.exists(args.session_file):
+        logger.error(f'Session file not found: {args.session_file}')
+        sys.exit(-1)
+
+    with open(args.session_file, 'r') as f:
+        data = f.read()
+        json_data = json.loads(data)
+        state['session_id'] = json_data.get('session_id')
+        state['session_key'] = json_data.get('symmetric_key')
+
+    state['document_name'] = args.document_name
+    state['operation'] = args.operation
+    state['role'] = args.role
+    state['permission'] = args.permission
+
+    return state
+
+def send_request_to_server(state, repo_key):
+    url = f"http://{state['REP_ADDRESS']}/docs/acl"
+
+    session_key = bytes.fromhex(state['session_key'])
+    data = {
+        "document_name": state["document_name"],
+        "operation": state["operation"],
+        "role": state["role"],
+        "permission": state["permission"]
+    }
+
+    encrypted_data = encrypt_message(data, session_key)
+    data_to_send = {
+        "session_id": state["session_id"],
+        "encrypted_data": encrypted_data
+    }
+
+    try:
+        response = requests.post(url, json=data_to_send)
+        response.raise_for_status()
+
+        try:
+            server_response = response.json()
+        except ValueError:
+            server_response = response.text
+
+        repo_key = serialization.load_pem_public_key(repo_key.encode())
+        signature_data = json.dumps(data).encode()
+        if verify_repository_signature(signature_data, bytes.fromhex(server_response["signature"]), repo_key):
+            logger.info("ACL updated successfully!")
+            print(f"ACL updated for document '{state['document_name']}'!")
+            return 0
+        else:
+            print("Signature not valid...")
+            return -1
+    except Exception as e:
+        raise ValueError(f"Error updating ACL: {e}")
+
+def main():
+    state = sh.load_state()
+    state = sh.parse_env(state)
+    state.update(parse_args())
+
+    state['REP_ADDRESS'] = state.get('REP_ADDRESS', 'localhost:5000')
+    repo_key = state["REP_PUB_KEY"]
+    send_request_to_server(state, repo_key)
+
+    if 'REP_ADDRESS' not in state:
+        logger.error("Must define Repository Address")
+        sys.exit(-1)
+
+    if 'REP_PUB_KEY' not in state:
+        logger.error("Must set the Repository Public Key")
+        sys.exit(-1)
+
+    sh.save(state)
+
+if __name__ == '__main__':
+    main()

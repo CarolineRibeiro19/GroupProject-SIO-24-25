@@ -1,0 +1,144 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+# ./rep_list_subjects <session file> [username]
+
+import os
+import sys
+import cryptography
+import logging
+import requests
+import argparse
+import json
+from cryptography.hazmat.primitives import serialization
+from functions.common_functions import get_session_data, verify_repository_signature
+from functions.encrypt_message import encrypt_message
+import state_handler as sh
+
+logging.basicConfig(format='%(levelname)s\t- %(message)s')
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def parse_args():
+    # Configura o analisador de argumentos
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-k", '--key', nargs=1, help="Path to the key file")
+    parser.add_argument("-r", '--repo', nargs=1, help="Address:Port of the repository")
+    parser.add_argument("session_file", help="Session file")
+    parser.add_argument("username", nargs="?", help="Optional username to filter results")  # Campo opcional
+    parser.add_argument("-v", '--verbose', help="Increase verbosity", action="store_true")
+
+    args = parser.parse_args()
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+        logger.info('Setting log level to DEBUG')
+
+    if args.key:
+        if not os.path.exists(args.key[0]) or not os.path.isfile(args.key[0]):
+            logger.error(f'Key file not found or invalid: {args.key[0]}')
+            sys.exit(-1)
+
+        with open(args.key[0], 'r') as f:
+            state['REP_PUB_KEY'] = f.read()
+            logger.info('Overriding REP_PUB_KEY from command line')
+
+    if args.repo:
+        state['REP_ADDRESS'] = args.repo[0]
+        logger.info('Overriding REP_ADDRESS from command line')
+
+    state = {}
+
+    # Verifica se a session file existe
+    if not os.path.exists(args.session_file):
+        logger.error(f'Session file not found: {args.session_file}')
+        sys.exit(-1)
+
+    with open(args.session_file, 'r') as f:
+        data = f.read()
+        json_data = json.loads(data)
+        state['session_id'] = json_data.get('session_id')
+        state['session_key'] = json_data.get('symmetric_key')
+
+    # Adiciona o username ao estado se fornecido
+    if args.username:
+        state['username'] = args.username
+    else:
+        state['username'] = None 
+
+    return state
+
+def send_request_to_server(state, repo_key):
+    # Define a URL do servidor
+    url = f"http://{state['REP_ADDRESS']}/subject/list"
+
+    # Inclui o username na solicitação, se fornecido
+    if state['username'] != None:
+        session_key = bytes.fromhex(state['session_key'])
+        encrypted_data = encrypt_message(state['username'], session_key)
+        data_to_send = {
+        "session_id": state["session_id"],
+        "encrypted_data" : encrypted_data
+        }
+    else:
+        data_to_send = {
+            "session_id": state["session_id"]
+        }
+
+    try:
+        # Envia a solicitação POST para o servidor
+        response = requests.post(url, json=data_to_send)
+        response.raise_for_status()  # Raises an error if the response is an HTTP error code
+        try:
+            server_response = response.json()  # Tenta interpretar o conteúdo como JSON
+        except ValueError:
+            server_response = response.text  # Se não for JSON, trata como texto
+        
+        # Verifica a assinatura do servidor
+        repo_key = serialization.load_pem_public_key(repo_key.encode())
+        if state['username'] != None:
+            data= state['username'].encode('utf-8')
+            if verify_repository_signature(data, bytes.fromhex(server_response["signature"]), repo_key):
+                print(server_response["subject"])
+                print("Subject was listed successfully!")
+                return 0
+            else:
+                print("Signature not valid...")
+                return -1
+        else:
+            data = state['session_id'].encode()
+            if verify_repository_signature(data, bytes.fromhex(server_response["signature"]), repo_key):
+                subjects_data = server_response["subjects"]
+                logger.info("Subjects:")
+                for i in range(len(subjects_data)):
+                    logger.info(f" {subjects_data[i]['status'] , subjects_data[i]['username'], subjects_data[i]['name']}")     
+                print("All subjects were listed successfully!")
+                return 0
+
+            else:
+                print("Signature not valid...")
+                return -1
+    except Exception as e:
+        raise ValueError(f"Error sending role and username: {e}")
+
+def main():
+    # Função principal que carrega o estado e lista as organizações
+    state = sh.load_state()
+    state = sh.parse_env(state)
+    state.update(parse_args())
+
+    state['REP_ADDRESS'] = state.get('REP_ADDRESS', 'localhost:5000')
+    repo_key = state["REP_PUB_KEY"]
+    send_request_to_server(state, repo_key)
+
+    if 'REP_ADDRESS' not in state:
+        logger.error("Must define Repository Address")
+        sys.exit(-1)
+
+    if 'REP_PUB_KEY' not in state:
+        logger.error("Must set the Repository Public Key")
+        sys.exit(-1)
+
+    sh.save(state)
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,142 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import os
+import sys
+import logging
+import requests
+import argparse
+import json
+from cryptography.hazmat.primitives import serialization
+from functions.common_functions import get_session_data, verify_repository_signature
+from functions.encrypt_message import encrypt_message
+import state_handler as sh
+
+logging.basicConfig(format='%(levelname)s\t- %(message)s')
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def parse_args():
+    # Configura o analisador de argumentos
+    parser = argparse.ArgumentParser(description="List documents from the organization with optional filters")
+    parser.add_argument("session_file", help="Session file")
+    parser.add_argument("-s", "--subject", help="Filter by username (creator)")
+    parser.add_argument("-d", "--date", help="Filter by date (nt/ot/et DD-MM-YYYY)")
+    parser.add_argument("-v", "--verbose", help="Increase verbosity", action="store_true")
+    parser.add_argument("-k", "--key", nargs=1, help="Path to the key file")
+    parser.add_argument("-r", "--repo", nargs=1, help="Address:Port of the repository")
+
+    args = parser.parse_args()
+
+    if args.verbose:
+        logger.setLevel(logging.DEBUG)
+        logger.info('Setting log level to DEBUG')
+
+    state = {}
+
+    if args.key:
+        if not os.path.exists(args.key[0]) or not os.path.isfile(args.key[0]):
+            logger.error(f'Key file not found or invalid: {args.key[0]}')
+            sys.exit(-1)
+
+        with open(args.key[0], 'r') as f:
+            state['REP_PUB_KEY'] = f.read()
+            logger.info('Overriding REP_PUB_KEY from command line')
+
+    if args.repo:
+        state['REP_ADDRESS'] = args.repo[0]
+        logger.info('Overriding REP_ADDRESS from command line')
+
+    # Verifica se o arquivo de sessão existe
+    if not os.path.exists(args.session_file):
+        logger.error(f'Session file not found: {args.session_file}')
+        sys.exit(-1)
+
+    with open(args.session_file, 'r') as f:
+        data = f.read()
+        json_data = json.loads(data)
+        state['session_id'] = json_data.get('session_id')
+        state['session_key'] = json_data.get('symmetric_key')
+
+    # Adiciona os argumentos opcionais ao estado
+    state['username'] = args.subject
+    state['date'] = args.date
+
+    return state
+
+def send_request_to_server(state, repo_key):
+    # Define a URL do servidor
+    url = f"http://{state['REP_ADDRESS']}/docs/list"
+
+    # Constrói os dados a serem enviados
+    session_key = bytes.fromhex(state['session_key'])
+    filters = {
+        "username": state["username"],
+        "date": state["date"]
+    }
+
+    encrypted_data = encrypt_message(filters, session_key)
+    data_to_send = {
+        "session_id": state["session_id"],
+        "encrypted_data": encrypted_data
+    }
+
+    try:
+        # Envia a solicitação POST para o servidor
+        response = requests.post(url, json=data_to_send)
+        response.raise_for_status()
+
+        try:
+            server_response = response.json()
+        except ValueError:
+            server_response = response.text
+
+        # Verifica a assinatura do servidor
+        repo_key = serialization.load_pem_public_key(repo_key.encode())
+        data = json.dumps(filters).encode('utf-8')
+        if state['username'] != None or state['date'] != None:
+            if state['username'] != None and state['date'] == None:
+                data = state['username'].encode()
+            elif state['username'] == None and state['date'] != None:
+                data = state['date'].encode()
+            else:
+                data = {"username": state['username'], "date_filter": state['date_filter']}
+                data = json.dumps(data).encode()
+        else:
+            data = state['session_id'].encode()
+        if verify_repository_signature(data, bytes.fromhex(server_response["signature"]), repo_key):
+            documents = server_response["documents"]
+            logger.info("Documents:")
+            for doc in documents:
+                logger.info(f"Creation date: {doc['creation_date']}, Name: {doc['name']}")
+            print("Documents listed successfully!")
+            return 0
+        else:
+            print("Signature not valid...")
+            return -1
+        
+    except Exception as e:
+        raise ValueError(f"Error listing documents: {e}")
+
+def main():
+    # Função principal que carrega o estado e lista os documentos
+    state = sh.load_state()
+    state = sh.parse_env(state)
+    state.update(parse_args())
+
+    state['REP_ADDRESS'] = state.get('REP_ADDRESS', 'localhost:5000')
+    repo_key = state["REP_PUB_KEY"]
+    send_request_to_server(state, repo_key)
+
+    if 'REP_ADDRESS' not in state:
+        logger.error("Must define Repository Address")
+        sys.exit(-1)
+
+    if 'REP_PUB_KEY' not in state:
+        logger.error("Must set the Repository Public Key")
+        sys.exit(-1)
+
+    sh.save(state)
+
+if __name__ == '__main__':
+    main()

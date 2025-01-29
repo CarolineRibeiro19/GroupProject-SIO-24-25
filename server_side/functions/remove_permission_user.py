@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import base64
+import os
+import sqlite3
+import json
+from functions.create_table_if_not_exists import create_table_if_not_exists
+from functions.decrypt_message import decrypt_message
+from functions.repo_operations import check_permission_user, get_public_key, get_username_by_id, load_server_private_key, load_session_from_id, sign_message, verify_session_file, verify_subject_signature
+
+
+def remove_permission_user(data, permission="ROLE_MOD"):
+
+    session_id = data["session_id"]
+
+    if verify_session_file(session_id):
+
+        session_data = load_session_from_id(session_id)
+
+        session_roles = session_data.get("roles")
+        session_org_id = session_data.get("organization_id")
+        session_key = session_data.get("symmetric_key")
+        session_user_id = session_data.get("user_id")
+        session_username = get_username_by_id(session_user_id)
+        session_key = bytes.fromhex(session_key)
+
+        decrypted_message = decrypt_message(data["encrypted_data"],session_key) 
+
+        data_str = decrypted_message.decode('utf-8')
+
+        # Passo 2: Carregar a string como um dicionário
+        data_dict = json.loads(data_str)
+
+        # Passo 3: Acessar o valor da chave "roles"
+        role = data_dict["role"]
+        username= data_dict["username"]
+
+        session_org_id = json.dumps(session_org_id)
+
+        if check_permission_user(session_roles, session_org_id, session_username, permission):
+
+            conn = sqlite3.connect('repository.db')
+            create_table_if_not_exists(conn)
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("SELECT username FROM subjects WHERE username = ?", (username,))
+                user_exists = cursor.fetchone()
+                if not user_exists:
+                    return f"Username '{username}' does not exist in the subjects database", 404
+
+                # Passo 1: Buscar o conteúdo atual de `acl`
+                cursor.execute("SELECT acl FROM organizations WHERE id = ?", (session_org_id[1],))
+                result = cursor.fetchone()
+
+                if result and result[0]:
+                    current_acl = json.loads(result[0])  # Carrega o JSON existente
+                else:
+                    return "No ACL found for this organization", 404
+
+                # Passo 2: Verificar se o role existe
+                if "roles" in current_acl and role in current_acl["roles"]:
+                    # Adicionar o username à lista 'subjects' se ainda não existir
+                    subjects = current_acl["roles"][role].get("subjects", [])
+                    if username in subjects:
+                        subjects.remove(username)
+                        current_acl["roles"][role]["subjects"] = subjects
+                    else:
+                        return f"Username '{username}' already exists in role '{role}'", 409
+                else:
+                    return f"Role '{role}' not found in ACL", 404
+
+                # Passo 3: Atualizar a coluna `acl` no banco de dados
+                cursor.execute(
+                    """
+                    UPDATE organizations
+                    SET acl = ?
+                    WHERE id = ?
+                    """,
+                    (json.dumps(current_acl), session_org_id[1])
+                )
+
+                # Commit e assinatura da mensagem
+                conn.commit()
+                server_private_key =  load_server_private_key()
+                signature = sign_message(decrypted_message, server_private_key)
+                signature = {"signature": signature.hex()}
+
+                return signature, 201
+
+            except sqlite3.IntegrityError:
+                return "Role already exists for this organization", 409
+
+            except Exception as e:
+                return f"Database error: {e}", 500
+
+            finally:
+                conn.close()
+        else:
+            return "Permission denied", 403
+    else:
+        return "Invalid session file", 400
