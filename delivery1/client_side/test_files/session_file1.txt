@@ -1,4 +1,0 @@
-{
-    "session_id": "1234",
-    "symmetric_key": "acbc284985b3e04c5dfae4b8b878c5de00a42c26033fed0dba37d3dcf69318f9"
-}
