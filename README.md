@@ -1,5 +1,4 @@
-# **Security of Information and Organizations 2024/25**  
-**Entrega 2**
+# **Security of Information and Organizations 2024/2025**  
 
 ## **Componentes do Projeto**
 -  Júlia Abrantes ([julia.abrantes@ua.pt](mailto:julia.abrantes@ua.pt))  
