@@ -2,9 +2,9 @@
 **Entrega 2**
 
 ## **Componentes do Projeto**
-- **104170** - Júlia Abrantes ([julia.abrantes@ua.pt](mailto:julia.abrantes@ua.pt))  
-- **106093** - Caroline Ribeiro ([caroline.ribeiro@ua.pt](mailto:caroline.ribeiro@ua.pt))  
-- **117450** - Ellen Sales ([ellensales@ua.pt](mailto:ellensales@ua.pt))  
+-  Júlia Abrantes ([julia.abrantes@ua.pt](mailto:julia.abrantes@ua.pt))  
+-  Caroline Ribeiro ([caroline.ribeiro@ua.pt](mailto:caroline.ribeiro@ua.pt))  
+-  Ellen Sales ([ellensales@ua.pt](mailto:ellensales@ua.pt))  
 
 ---
 
