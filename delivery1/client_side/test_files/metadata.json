@@ -1,0 +1,10 @@
+{
+    "alg": {
+        "name": "AES-128",
+        "keysize": 128,
+        "mode": "CBC",
+        "iv": "aad1583cd91365e3bb2f0c3430d065bb",
+        "hash": "sha3-224"
+    },
+    "key": "0700d603a1c514e46b6191ba430a3a0c"
+}

@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import json
+import os
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+organizations = {}
+
+from functions.download_file import download_file as download_file_func
+@app.route("/download", methods=["GET"])
+def download_file():
+    filehandler = request.args.get('filehandler') 
+    return download_file_func(app,filehandler)
+
+from functions.document_handle import list_docs as list_docs_func
+from functions.document_handle import find_org
+@app.route("/documents/list", methods=["GET"])
+def list_docs():
+    session_id = request.args.get('session_id')
+    org = find_org(session_id)
+    list, status_code  = list_docs_func(app, org)
+    return jsonify({"documents": list}), status_code
+
+from functions.document_handle import add_doc
+from functions.repo_operations import decrypt_data, decrypt_symmetric_key, load_server_private_key
+@app.route("/create_document", methods=["POST"])
+def add_doc_func():
+
+    try:
+        data = request.get_json()
+        print("DATA>>", data)
+        print(type(data))
+        if not data:
+            return jsonify({"ERROR": "No data was sent or the format is invalid"}), 400
+        
+        session_id = data.get("session_id")
+        organization_id = find_org(session_id)
+        print("ORG>>", organization_id)
+        #decrypt key
+        symmetric_key = decrypt_symmetric_key(data.get("encrypted_key"), load_server_private_key())
+        print("KEY>>", symmetric_key)
+        #decrypted data
+        decrypted = decrypt_data(bytes.fromhex(data.get("encrypted_data")), 
+                                 symmetric_key, 
+                                 bytes.fromhex(data.get('nonce')), 
+                                 bytes.fromhex(data.get('tag')))
+        print("DECRYPTED>> ",decrypted)
+        decrypted = json.loads(decrypted)
+        print(decrypted)
+        print(type(decrypted))
+
+        ##call add_doc
+        response, status_code = add_doc(name = decrypted['document_name'], 
+                                        file_handle = decrypted['file_diggest'],
+                                        alg = decrypted['alg'],
+                                        key = decrypted['key'],
+                                        organization_id = organization_id)
+        print("RESPONSE>>", response)
+        return jsonify(response), status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    #extract pliantext datadata =
+    data = request.json
+    print("DATA>>", data)
+    print(type(data))
+    encrypted_Data = data.get("encrypted_data")
+
+    #get active session
+    session_id = data.get("session_id")
+    organization_id = find_org(session_id)
+    #decrypt key
+    symmetric_key = decrypt_symmetric_key(data.get("encrypted_key"), load_server_private_key())
+    #decrypted data
+    decrypted = decrypt_data(data.get("encrypted_data"), symmetric_key, data.get('nonce'), data.get('tag'))
+
+    print("DECRYPTED>> ",decrypted)
+    print(type(decrypted))
+    decrypted = json.loads(decrypted)
+    print(decrypted)
+    print(type(decrypted))
+
+    message, status_code = add_doc(decrypted['name'], decrypted['file_handle'], decrypted['alg'], decrypted['key'], organization_id)
+    return jsonify({"message": message}), status_code
+
+
+from functions.list_orgs import list_orgs as list_orgs_func
+@app.route("/organization/list", methods = ['GET'])
+def org_list():
+    organizations, status_code = list_orgs_func()
+    return jsonify({"organizations": organizations}), status_code
+
+from functions.list_subjects import list_subjects as list_subjects_func
+@app.route("/subject/list", methods = ['POST'])
+def subject_list():
+    data = request.json
+    session_id = data.get("session_id")
+
+    session_file_path = os.path.join("sessions", f"{session_id}.json")
+
+    if not os.path.exists(session_file_path):
+        return jsonify({"error": f"Session file not found for session_id: {session_id}"}), 404
+
+    try:
+        # Abrir o arquivo de sessão e obter o organization_id
+        with open(session_file_path, 'r') as session_file:
+            session_data = json.load(session_file)
+            organization_id = session_data.get("organization_id")
+            if not organization_id:
+                return jsonify({"error": "organization_id not found in session file"}), 500
+    except json.JSONDecodeError:
+        return jsonify({"error": "Invalid session file format"}), 500
+    
+    message, status_code = list_subjects_func(organization_id,)
+    return jsonify({"message": message}), status_code
+
+
+from functions.create_org import create_org as create_org_func
+@app.route("/organization/create", methods=['POST'])
+def create_org():
+    data = request.json
+    organization = data.get("organization")
+    username = data.get("username") 
+    name = data.get("name")
+    email = data.get("email")
+    public_key = data.get("public_key")
+
+    if not all ([organization, username, name, email, public_key]):
+        return jsonify({"error": "Missing parameters"}), 400
+    
+    message, status_code = create_org_func(organization, username, name, email, public_key)
+    return jsonify({"message": message}), status_code
+
+from functions.repo_operations import create_session as create_session_func
+@app.route('/create_session', methods=['POST'])
+def create_session_route():
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"ERROR": "No data was sent or the format is invalid"}), 400
+        response, status_code = create_session_func(data)
+        return jsonify(response), status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+from functions.add_subject import add_subject as add_subject_func
+@app.route("/subject/add", methods=['POST'])
+def add_subject():
+    data = request.json
+    session_id = data.get("session_id") 
+    username = data.get("username")
+    name = data.get("name")
+    email = data.get("email")
+    public_key = data.get("public_key")
+
+    if not all([session_id, username, name, email, public_key]):
+        return jsonify({"error": "Missing parameters"}), 400
+    
+    session_file = os.path.join("sessions", f"{session_id}.json")
+    if not os.path.exists(session_file):
+        return jsonify({"error": f"Session file not found: {session_file}"}), 404
+
+    with open(session_file, "r") as f:
+        session = json.load(f)
+        organization_id = session.get("organization_id")
+
+    message, status_code = add_subject_func(organization_id, username, name, email, public_key)
+    return jsonify({"message": message}), status_code
+
+from functions.suspend_subject import suspend_subject as suspend_subject_func
+@app.route("/subject/suspend", methods=['PATCH'])
+def suspend_subject():
+    data = request.json
+    session_id = data.get("session_id")
+    username = data.get("username")
+
+    if not all([session_id, username]):
+        return jsonify({"error": "Missing parameters"}), 400
+
+    result = suspend_subject_func(session_id, username)
+
+    # Verifica se o resultado contém dois valores (mensagem e código de status)
+    if isinstance(result, tuple) and len(result) == 2:
+        message, status_code = result
+    else:
+        message = result
+        status_code = 400  # ou algum código de status padrão para quando houver apenas uma mensagem
+
+    print(f"Message: {message}, Status Code: {status_code}")
+    return jsonify({"message": message}), status_code
+
+from functions.activate_subject import activate_subject as activate_subject_func
+@app.route("/subject/activate", methods=['PATCH'])
+def activate_subject():
+    data = request.json
+    session_id = data.get("session_id")
+    username = data.get("username")
+
+    if not all([session_id, username]):
+        return jsonify({"error": "Missing parameters"}), 400
+
+    message, status_code = activate_subject_func(session_id,username)
+    return jsonify({"message": message}), status_code
+
+if __name__ == "__main__":
+    app.run(debug=True)

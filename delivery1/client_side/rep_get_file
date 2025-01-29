@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+# ./rep_get_file <file handle> [file]
+
+import logging
+import sys
+import json
+import os
+import requests
+import argparse
+from decipher import check_hash
+import state_handler as sh
+
+#set debug level
+logging.basicConfig(format='%(levelname)s\t- %(message)s')
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def parse_args():
+    #parse_env e parse_args ajustam o estado usando variáveis de ambiente e argumentos.
+    state = sh.load_state()
+    state = sh.parse_env(state)
+
+    parser = argparse.ArgumentParser(prog='rep_get_file', usage='%(prog)s <filehandler> [file]')
+    parser.add_argument("filehandler", help="File handler to download")
+    parser.add_argument("file", help="Local file to save the downloaded file", nargs="?", default=None)
+    parser.add_argument("-k", '--key', nargs=1, help="Path to the key file")
+    parser.add_argument("-r", '--repo', nargs=1, help="Address:Port of the repository")
+    parser.add_argument("-v", '--verbose', help="Increase verbosity", action="store_true")
+
+    args = parser.parse_args()
+    sh.increase_verbose(args.verbose)
+    logger.debug(f'filehandler: {args.filehandler}')
+
+    state = sh.get_param_state(args.key, args.repo, state)
+
+    sh.save(state)
+    
+    return state, args.filehandler, args.file
+
+def download_file(url, local_filename=None):
+    #Faz uma requisição HTTP para o endereço configurado, e exibe a resposta JSON.
+    with requests.get(url, stream=True) as r:
+        r.raise_for_status()
+        # Abre um arquivo local para escrever o conteúdo baixado
+        content = b''
+        for chunk in r.iter_content(chunk_size=8192):
+            content = content+chunk
+        
+        try:
+            # Se o nome do arquivo local foi fornecido, salva o conteúdo baixado no arquivo
+            with open(local_filename, 'wb') as f:
+                logger.info(f"Downloading file to {local_filename}")
+                f.write(content)
+        except Exception as e:
+            # Se ocorrer um erro ao salvar o arquivo, exibe o erro
+            logger.error(f"Error downloading file: {e}")
+        finally:
+            # Exibe o conteúdo baixado no stdout
+            logger.info("Downloading file to stdout")
+            print(str(content)[2:-1])
+            return None
+
+            
+
+def main():
+    state, filehandler, local_file = parse_args()
+
+    logger.debug("state: %s", state)
+
+    # URL do arquivo no servidor
+    file_url = f"http://{state['REP_ADDRESS']}/download?filehandler={filehandler}"
+    # Nome do arquivo local onde o conteúdo será salvo
+
+    logger.debug(f"Downloading file from {file_url} to {local_file}")
+    # Faz o download do arquivo
+    download_file(file_url, local_file)
+    logger.info(f"File downloaded and saved as {local_file}")
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,42 @@
+{
+    "documents": [
+        {
+            "document_handle": 0,
+            "name": "files/exemplo.pdf",
+            "create_date": 1731450002.8484697,
+            "creator": "person",
+            "file_handle": "f0105d5ff773f0572c455b7de54ddaefc61b40749f5f9fc262f02832",
+            "acl": [],
+            "deleter": null,
+            "restricted_metadata": {
+                "alg": {
+                    "name": "AES-128",
+                    "keysize": 128,
+                    "mode": "CBC",
+                    "iv": "aad1583cd91365e3bb2f0c3430d065bb",
+                    "hash": "sha3-224"
+                },
+                "key": "0700d603a1c514e46b6191ba430a3a0c"
+            }
+        },
+        {
+            "document_handle": 1,
+            "name": "files/example.txt",
+            "create_date": 1731761693.946391,
+            "creator": "person",
+            "file_handle": "038fbec51b3d5604748d21c338815279d0968a0be40151996889cfb7",
+            "acl": [],
+            "deleter": null,
+            "restricted_metadata": {
+                "alg": {
+                    "name": "AES-128",
+                    "keysize": 128,
+                    "mode": "CBC",
+                    "iv": "aad1583cd91365e3bb2f0c3430d065bb",
+                    "hash": "sha3-224"
+                },
+                "key": "0700d603a1c514e46b6191ba430a3a0c"
+            }
+        }
+    ]
+}
